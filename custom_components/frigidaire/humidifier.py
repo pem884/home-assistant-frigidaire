@@ -27,6 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 FAN_LOW = "low"
+FAN_MEDIUM = "medium"
 FAN_HIGH = "high"
 
 
@@ -71,6 +72,7 @@ HA_TO_FRIGIDAIRE_MODE = {v: k for k, v in FRIGIDAIRE_TO_HA_MODE.items()}
 
 FRIGIDAIRE_TO_HA_FAN_MODE = {
     frigidaire.FanSpeed.LOW: FAN_LOW,
+    frigidaire.FanSpeed.MEDIUM: FAN_MEDIUM,
     frigidaire.FanSpeed.HIGH: FAN_HIGH,
 }
 
@@ -135,7 +137,7 @@ class FrigidaireDehumidifier(HumidifierEntity):
 
     @property
     def is_on(self):
-        return self._details.for_code(frigidaire.HaclCode.APPLIANCE_STATE) != 0
+        return self._details.get(frigidaire.Detail.APPLIANCE_STATE) == frigidaire.ApplianceState.RUNNING
 
     @property
     def supported_features(self):
@@ -150,14 +152,12 @@ class FrigidaireDehumidifier(HumidifierEntity):
     @property
     def target_humidity(self):
         """Return the humidity we try to reach."""
-        return self._details.for_code(frigidaire.HaclCode.TARGET_HUMIDITY).number_value
+        return self._details.get(frigidaire.Detail.TARGET_HUMIDITY)
 
     @property
     def mode(self):
         """Return current operation ie. dry, continuous."""
-        frigidaire_mode = self._details.for_code(
-            frigidaire.HaclCode.AC_MODE
-        ).number_value
+        frigidaire_mode = self._details.get(frigidaire.Detail.MODE)
 
         if frigidaire_mode == frigidaire.Mode.OFF:
             return MODE_NORMAL
@@ -167,34 +167,20 @@ class FrigidaireDehumidifier(HumidifierEntity):
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
         """Add extra state attributes specific to Frigidaire dehumidifiers"""
-        fan_speed = self._details.for_code(
-            frigidaire.HaclCode.AC_FAN_SPEED_SETTING
-        ).number_value
+        fan_speed = self._details.get(frigidaire.Detail.FAN_SPEED)
 
         attrib = {
-            "current_humidity": self._details.for_code(
-                frigidaire.HaclCode.AMBIENT_HUMIDITY
-            ).number_value,
+            "current_humidity": self._details.get(frigidaire.Detail.SENSOR_HUMIDITY),
             "check_filter": bool(
-                self._details.for_code(
-                    frigidaire.HaclCode.AC_CLEAN_FILTER_ALERT
-                ).number_value
+                self._details.get(frigidaire.Detail.FILTER_STATE) != frigidaire.FilterState.GOOD
             ),
             "fan_mode": FRIGIDAIRE_TO_HA_FAN_MODE[fan_speed],
         }
 
         # The following attributes only exist on some models of dehumidifier
-        if (bin_full := self._details.for_code(frigidaire.HaclCode.BIN_FULL_ALERT)
+        if (alerts := self._details.get(frigidaire.Detail.ALERTS)
                 ) is not None:
-            attrib["bin_full"] = bool(bin_full.number_value)
-
-        if (comp_run := self._details.for_code(frigidaire.HaclCode.COMPRESSOR_STATE)
-                ) is not None:
-            attrib["compressor_running"] = bool(comp_run.number_value)
-
-        if (fan_run := self._details.for_code(frigidaire.HaclCode.AC_FAN_SPEED_STATE)
-                ) is not None:
-            attrib["fan_running"] = bool(fan_run.number_value)
+            attrib["bin_full"] = frigidaire.Alert.BUCKET_FULL in alerts
 
         return attrib
 
@@ -247,7 +233,7 @@ class FrigidaireDehumidifier(HumidifierEntity):
             return
 
         # Turn on if not currently on.
-        if self._details.for_code(frigidaire.HaclCode.APPLIANCE_STATE) == 0:
+        if self._details.get(frigidaire.Detail.APPLIANCE_STATE) == frigidaire.ApplianceState.OFF:
             self.turn_on()
 
         self._client.execute_action(
@@ -265,6 +251,5 @@ class FrigidaireDehumidifier(HumidifierEntity):
             self._attr_available = False
         else:
             self._attr_available = (
-                self._details.for_code(frigidaire.HaclCode.CONNECTIVITY_STATE)
-                != frigidaire.ConnectivityState.DISCONNECTED
+                self._details.get("connectivityState") == "connected"
             )
